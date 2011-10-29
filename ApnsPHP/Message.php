@@ -438,7 +438,7 @@ class ApnsPHP_Message
         $sJSONPayload       = preg_replace('#(\\\\u[a-f\d]{4})#e', "json_decode('\"$1\"')", $sJSONPayload);
         $nJSONPayloadLen    = mb_strlen($sJSONPayload);
 
-        if ($nJSONPayloadLen > self::PAYLOAD_MAXIMUM_SIZE) {
+        if ($nJSONPayloadLen > self::PAYLOAD_MAXIMUM_SIZE && !$this->useLocalisation()) {
             if ($this->_bAutoAdjustLongPayload) {
                 $nMaxTextLen = $nTextLen = strlen($this->_sText) - ($nJSONPayloadLen - self::PAYLOAD_MAXIMUM_SIZE);
                 if ($nMaxTextLen > 0) {
@@ -456,6 +456,13 @@ class ApnsPHP_Message
                     self::PAYLOAD_MAXIMUM_SIZE . " bytes"
                 );
             }
+        }
+        elseif ($nJSONPayloadLen > self::PAYLOAD_MAXIMUM_SIZE && $this->useLocalisation())
+        {
+            throw new ApnsPHP_Message_Exception(
+                "JSON Payload is too long: {$nJSONPayloadLen} bytes. Maximum size is " .
+                self::PAYLOAD_MAXIMUM_SIZE . " bytes. The message text can not be auto-adjusted."
+            );
         }
 
         return $sJSONPayload;
