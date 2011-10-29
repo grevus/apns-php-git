@@ -42,13 +42,40 @@ class ApnsPHP_Message
 
 	protected $_sText; /**< @type string Alert message to display to the user. */
 	protected $_nBadge; /**< @type integer Number to badge the application icon with. */
-	protected $_sSound; /**< @type string Sound to play. */
+	protected $_sSound = 'default'; /**< @type string Sound to play. */
 
 	protected $_aCustomProperties; /**< @type mixed Custom properties container. */
 
 	protected $_nExpiryValue = 604800; /**< @type integer That message will expire in 604800 seconds (86400 * 7, 7 days) if not successful delivered. */
 
 	protected $_mCustomIdentifier; /**< @type mixed Custom message identifier. */
+
+    /**
+     * Use localisation strings
+     *
+     * @var bool
+     * @access protected
+     */
+
+    protected $_bUseLocalisation = false;
+
+    /**
+     * Localisation key
+     *
+     * @var string
+     * @access protected
+     */
+
+    protected $_sLoc_key = null;
+
+    /**
+     * Localisation args
+     *
+     * @var array
+     * @access protected
+     */
+
+    protected $_aLoc_args = null;
 
 	/**
 	 * Constructor.
@@ -137,6 +164,60 @@ class ApnsPHP_Message
 		return $this->_sText;
 	}
 
+    /**
+     * Set localisation key
+     *
+     * @param string    $sKey
+     * @access public
+     * @return Message this
+     */
+
+    public function setLocKey($sKey)
+    {
+        $this->_sLoc_key = $sKey;
+
+        return $this;
+    }
+
+    /**
+     * Retuns localisation key
+     *
+     * @access public
+     * @return string
+     */
+
+    public function getLocKey()
+    {
+        return $this->_sLoc_key;
+    }
+
+    /**
+     * Set localisation arguments
+     *
+     * @param array     $args
+     * @access public
+     * @return void
+     */
+
+    public function setLocArgs(array $aArgs)
+    {
+        $this->_aLoc_args = $aArgs;
+
+        return $this;
+    }
+
+    /**
+     * Returns localisations arguments
+     *
+     * @access public
+     * @return array
+     */
+
+    public function getLocArgs()
+    {
+        return $this->_aLoc_args;
+    }
+
 	/**
 	 * Set the number to badge the application icon with.
 	 *
@@ -201,6 +282,8 @@ class ApnsPHP_Message
 			);
 		}
 		$this->_aCustomProperties[trim($sName)] = $mValue;
+
+        return $this;
 	}
 
 	/**
@@ -312,21 +395,27 @@ class ApnsPHP_Message
 	{
 		$aPayload[self::APPLE_RESERVED_NAMESPACE] = array();
 
-		if (isset($this->_sText)) {
+        if (isset($this->_sText) || !$this->useLocalisation())
+        {
 			$aPayload[self::APPLE_RESERVED_NAMESPACE]['alert'] = (string)$this->_sText;
 		}
-		if (isset($this->_nBadge) && $this->_nBadge > 0) {
-			$aPayload[self::APPLE_RESERVED_NAMESPACE]['badge'] = (int)$this->_nBadge;
-		}
-		if (isset($this->_sSound)) {
-			$aPayload[self::APPLE_RESERVED_NAMESPACE]['sound'] = (string)$this->_sSound;
-		}
+        elseif ($this->useLocalisation())
+        {
+            $aPayload[self::APPLE_RESERVED_NAMESPACE]['alert'] = array(
+                'loc-key'   => $this->getLocKey(),
+                'loc-args'  => $this->getLocArgs(),
+            );
+        }
 
-		if (is_array($this->_aCustomProperties)) {
-			foreach($this->_aCustomProperties as $sPropertyName => $mPropertyValue) {
+        if (isset($this->_nBadge) && $this->_nBadge > 0)
+			$aPayload[self::APPLE_RESERVED_NAMESPACE]['badge'] = (int)$this->_nBadge;
+
+        if (isset($this->_sSound))
+			$aPayload[self::APPLE_RESERVED_NAMESPACE]['sound'] = (string)$this->_sSound;
+
+        if (is_array($this->_aCustomProperties))
+            foreach($this->_aCustomProperties as $sPropertyName => $mPropertyValue)
 				$aPayload[$sPropertyName] = $mPropertyValue;
-			}
-		}
 
 		return $aPayload;
 	}
@@ -422,4 +511,20 @@ class ApnsPHP_Message
 	{
 		return $this->_mCustomIdentifier;
 	}
+
+    /**
+     * Use localisation
+     *
+     * @param bool      $bIs
+     * @access public
+     * @return bool
+     */
+
+    public function useLocalisation($bIs = null)
+    {
+        if (!is_null($bIs))
+            $this->_bUseLocalisation = $bIs;
+
+        return $this->_bUseLocalisation;
+    }
 }
