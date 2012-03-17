@@ -335,4 +335,16 @@ class ApnsPHP_Push_Server extends ApnsPHP_Push
         }
         return shm_put_var($this->_hShm, $nQueueKey + $nProcess, $aQueue);
     }
+
+    /**
+     * Returns parent pid
+     *
+     * @access public
+     * @return int
+     */
+
+    public function getNParentPid()
+    {
+        return $this->_nParentPid;
+    }
 }
