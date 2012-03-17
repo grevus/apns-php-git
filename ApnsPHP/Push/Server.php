@@ -347,4 +347,16 @@ class ApnsPHP_Push_Server extends ApnsPHP_Push
     {
         return $this->_nParentPid;
     }
+
+    /**
+     * Retruns pids of child processes
+     *
+     * @access public
+     * @return array
+     */
+
+    public function getAPids()
+    {
+        return $this->_aPids;
+    }
 }
