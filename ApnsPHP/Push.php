@@ -62,6 +62,8 @@ class ApnsPHP_Push extends ApnsPHP_Abstract
 	protected $_aMessageQueue = array(); /**< @type array Message queue. */
 	protected $_aErrors = array(); /**< @type array Error container. */
 
+    protected $_bSkip_errors = false;
+
 	/**
 	 * Set the send retry times value.
 	 *
@@ -92,23 +94,36 @@ class ApnsPHP_Push extends ApnsPHP_Abstract
 	 */
 	public function add(ApnsPHP_Message $message)
 	{
-		$sMessagePayload = $message->getPayload();
-		$nRecipients = $message->getRecipientsNumber();
+        try
+        {
+            $sMessagePayload = $message->getPayload();
+            $nRecipients = $message->getRecipientsNumber();
 
-		$nMessageQueueLen = count($this->_aMessageQueue);
-		for ($i = 0; $i < $nRecipients; $i++) {
-			$nMessageID = $nMessageQueueLen + $i + 1;
-			$this->_aMessageQueue[$nMessageID] = array(
-				'MESSAGE' => $message,
-				'BINARY_NOTIFICATION' => $this->_getBinaryNotification(
-					$message->getRecipient($i),
-					$sMessagePayload,
-					$nMessageID,
-					$message->getExpiry()
-				),
-				'ERRORS' => array()
-			);
-		}
+            $nMessageQueueLen = count($this->_aMessageQueue);
+            for ($i = 0; $i < $nRecipients; $i++) {
+                $nMessageID = $nMessageQueueLen + $i + 1;
+                $this->_aMessageQueue[$nMessageID] = array(
+                    'MESSAGE' => $message,
+                    'BINARY_NOTIFICATION' => $this->_getBinaryNotification(
+                        $message->getRecipient($i),
+                        $sMessagePayload,
+                        $nMessageID,
+                        $message->getExpiry()
+                    ),
+                    'ERRORS' => array()
+                );
+            }
+
+            return true;
+        }
+        catch(Exception $e)
+        {
+            if (!$this->isSkipErrors())
+                throw $e;
+
+            $this->_log('Error: ' . $e->getMessage());
+            return false;
+        }
 	}
 
 	/**
@@ -119,94 +134,102 @@ class ApnsPHP_Push extends ApnsPHP_Abstract
 	 */
 	public function send()
 	{
-		if (!$this->_hSocket) {
-			throw new ApnsPHP_Push_Exception(
-				'Not connected to Push Notification Service'
-			);
-		}
+        if (!$this->_hSocket) {
+            throw new ApnsPHP_Push_Exception(
+                'Not connected to Push Notification Service'
+            );
+        }
 
-		if (empty($this->_aMessageQueue)) {
-			throw new ApnsPHP_Push_Exception(
-				'No notifications queued to be sent'
-			);
-		}
+        if (empty($this->_aMessageQueue))
+        {
+            if ($this->isSkipErrors())
+                return $this;
 
-		$this->_aErrors = array();
-		$nRun = 1;
-		while (($nMessages = count($this->_aMessageQueue)) > 0) {
-			$this->_log("INFO: Sending messages queue, run #{$nRun}: $nMessages message(s) left in queue.");
+            throw new ApnsPHP_Push_Exception(
+                'No notifications queued to be sent'
+            );
+        }
 
-			$bError = false;
-			foreach($this->_aMessageQueue as $k => &$aMessage) {
-				if (function_exists('pcntl_signal_dispatch')) {
-					pcntl_signal_dispatch();
-				}
+        $this->_aErrors = array();
+        $nRun = 1;
+        while (($nMessages = count($this->_aMessageQueue)) > 0)
+        {
+            $this->_log("INFO: Sending messages queue, run #{$nRun}: $nMessages message(s) left in queue.");
 
-				$message = $aMessage['MESSAGE'];
-				$sCustomIdentifier = (string)$message->getCustomIdentifier();
-				$sCustomIdentifier = sprintf('[custom identifier: %s]', empty($sCustomIdentifier) ? 'unset' : $sCustomIdentifier);
+            $bError = false;
+            foreach($this->_aMessageQueue as $k => &$aMessage)
+            {
+                $this->_setCurMessageId($k);
 
-				$nErrors = 0;
-				if (!empty($aMessage['ERRORS'])) {
-					foreach($aMessage['ERRORS'] as $aError) {
-						if ($aError['statusCode'] == 0) {
-							$this->_log("INFO: Message ID {$k} {$sCustomIdentifier} has no error ({$aError['statusCode']}), removing from queue...");
-							$this->_removeMessageFromQueue($k);
-							continue 2;
-						} else if ($aError['statusCode'] > 1 && $aError['statusCode'] <= 8) {
-							$this->_log("WARNING: Message ID {$k} {$sCustomIdentifier} has an unrecoverable error ({$aError['statusCode']}), removing from queue without retrying...");
-							$this->_removeMessageFromQueue($k, true);
-							continue 2;
-						}
-					}
-					if (($nErrors = count($aMessage['ERRORS'])) >= $this->_nSendRetryTimes) {
-						$this->_log(
-							"WARNING: Message ID {$k} {$sCustomIdentifier} has {$nErrors} errors, removing from queue..."
-						);
-						$this->_removeMessageFromQueue($k, true);
-						continue;
-					}
-				}
+                if (function_exists('pcntl_signal_dispatch')) {
+                    pcntl_signal_dispatch();
+                }
 
-				$nLen = strlen($aMessage['BINARY_NOTIFICATION']);
-				$this->_log("STATUS: Sending message ID {$k} {$sCustomIdentifier} (" . ($nErrors + 1) . "/{$this->_nSendRetryTimes}): {$nLen} bytes.");
+                $message = $aMessage['MESSAGE'];
+                $sCustomIdentifier = (string)$message->getCustomIdentifier();
+                $sCustomIdentifier = sprintf('[custom identifier: %s]', empty($sCustomIdentifier) ? 'unset' : $sCustomIdentifier);
 
-				$aErrorMessage = null;
-				if ($nLen !== ($nWritten = (int)@fwrite($this->_hSocket, $aMessage['BINARY_NOTIFICATION']))) {
-					$aErrorMessage = array(
-						'identifier' => $k,
-						'statusCode' => self::STATUS_CODE_INTERNAL_ERROR,
-						'statusMessage' => sprintf('%s (%d bytes written instead of %d bytes)',
-							$this->_aErrorResponseMessages[self::STATUS_CODE_INTERNAL_ERROR], $nWritten, $nLen
-						)
-					);
-				}
+                $nErrors = 0;
+                if (!empty($aMessage['ERRORS'])) {
+                    foreach($aMessage['ERRORS'] as $aError) {
+                        if ($aError['statusCode'] == 0) {
+                            $this->_log("INFO: Message ID {$k} {$sCustomIdentifier} has no error ({$aError['statusCode']}), removing from queue...");
+                            $this->_removeMessageFromQueue($k);
+                            continue 2;
+                        } else if ($aError['statusCode'] > 1 && $aError['statusCode'] <= 8) {
+                            $this->_log("WARNING: Message ID {$k} {$sCustomIdentifier} has an unrecoverable error ({$aError['statusCode']}), removing from queue without retrying...");
+                            $this->_removeMessageFromQueue($k, true);
+                            continue 2;
+                        }
+                    }
+                    if (($nErrors = count($aMessage['ERRORS'])) >= $this->_nSendRetryTimes) {
+                        $this->_log(
+                            "WARNING: Message ID {$k} {$sCustomIdentifier} has {$nErrors} errors, removing from queue..."
+                        );
+                        $this->_removeMessageFromQueue($k, true);
+                        continue;
+                    }
+                }
 
-				$bError = $this->_updateQueue($aErrorMessage);
-				if ($bError) {
-					break;
-				}
-			}
+                $nLen = strlen($aMessage['BINARY_NOTIFICATION']);
+                $this->_log("STATUS: Sending message ID {$k} {$sCustomIdentifier} (" . ($nErrors + 1) . "/{$this->_nSendRetryTimes}): {$nLen} bytes.");
 
-			if (!$bError) {
-				$read = array($this->_hSocket);
-				$null = NULL;
-				$nChangedStreams = @stream_select($read, $null, $null, 0, $this->_nSocketSelectTimeout);
-				if ($nChangedStreams === false) {
-					$this->_log('ERROR: Unable to wait for a stream availability.');
-					break;
-				} else if ($nChangedStreams > 0) {
-					$bError = $this->_updateQueue();
-					if (!$bError) {
-						$this->_aMessageQueue = array();
-					}
-				} else {
-					$this->_aMessageQueue = array();
-				}
-			}
+                $aErrorMessage = null;
+                if ($nLen !== ($nWritten = (int)@fwrite($this->_hSocket, $aMessage['BINARY_NOTIFICATION']))) {
+                    $aErrorMessage = array(
+                        'identifier' => $k,
+                        'statusCode' => self::STATUS_CODE_INTERNAL_ERROR,
+                        'statusMessage' => sprintf('%s (%d bytes written instead of %d bytes)',
+                        $this->_aErrorResponseMessages[self::STATUS_CODE_INTERNAL_ERROR], $nWritten, $nLen
+                    )
+                );
+                }
 
-			$nRun++;
-		}
+                $bError = $this->_updateQueue($aErrorMessage);
+                if ($bError) {
+                    break;
+                }
+            }
+
+            if (!$bError) {
+                $read = array($this->_hSocket);
+                $null = NULL;
+                $nChangedStreams = @stream_select($read, $null, $null, 0, $this->_nSocketSelectTimeout);
+                if ($nChangedStreams === false) {
+                    $this->_log('ERROR: Unable to wait for a stream availability.');
+                    break;
+                } else if ($nChangedStreams > 0) {
+                    $bError = $this->_updateQueue();
+                    if (!$bError) {
+                        $this->_aMessageQueue = array();
+                    }
+                } else {
+                    $this->_aMessageQueue = array();
+                }
+            }
+
+            $nRun++;
+        }
 	}
 
 	/**
@@ -383,5 +406,60 @@ class ApnsPHP_Push extends ApnsPHP_Abstract
 			$this->_aErrors[$nMessageID] = $this->_aMessageQueue[$nMessageID];
 		}
 		unset($this->_aMessageQueue[$nMessageID]);
+        unset($this->_iCurMessageId);
 	}
+
+    /**
+     * Set skip errors flag
+     *
+     * @param bool      $bIsSkip
+     * @access protected
+     * @return object this
+     */
+
+    public function setSkipErrors($bIsSkip)
+    {
+        $this->_bSkip_errors = $bIsSkip;
+
+        return $this;
+    }
+
+    /**
+     * Set cur message id
+     *
+     * @param int       $iId
+     * @access protected
+     * @return object this
+     */
+
+    protected function _setCurMessageId($iId)
+    {
+        $this->_iCurMessageId = $id;
+
+        return $this;
+    }
+
+    /**
+     * Returns skip errors
+     *
+     * @access protected
+     * @return bool
+     */
+
+    protected function isSkipErrors()
+    {
+        return $this->_bSkip_errors;
+    }
+
+    /**
+     * Returns current message ID
+     *
+     * @access protected
+     * @return int
+     */
+
+    protected function _getCurMessageId()
+    {
+        return $this->_iCurMessageId;
+    }
 }
